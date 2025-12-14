@@ -1,1 +1,9 @@
-.root
+*.root
+*.txt
+*.exe
+*.out
+*.log
+*.so
+*.dylib
+*.o
+*.class
