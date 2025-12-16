@@ -122,11 +122,19 @@ int main(int argc, char* argv[]) {
                     continue;  // do not cluster the trigger channel
                 }
 
-                int layerIndex = -1;
-                layerIndex = (currentChannel % 24) / 8;
+                int layerIndex = (currentChannel % 24) / 8;
+                
                 //std::cout << "For entry " << entry << ", Hit channel: " << currentChannel << ", Layer: " << layerIndex << std::endl;
                 int connector = currentChannel / 24;
                 int strip = 8 * connector + currentChannel % 8;
+                std::cout << "entry " << entry << ": Hit channel " << currentChannel
+                          << " mapped to layer " << layerIndex
+                          << ", connector " << connector
+                          << ", strip " << strip 
+                          << ", eta " << (belongsToEta1 ? "1" : "2")
+                          << ", edge " << (isLeadingEdge ? "Leading" : "Trailing")
+                          << ", time " << timeValue
+                          << std::endl;
                 pendingHits.push_back(PendingHit{
                     layerIndex,
                     strip,
@@ -137,20 +145,21 @@ int main(int argc, char* argv[]) {
             } // End loop on hits
             //std::cout << "Event " << entry << ": found " << pendingHits.size() << " valid hits over a total of hits available " << hit_channel->size() << " channels, trigger time = " << triggerTime << std::endl;
             //std::cout << "  Hit details (layer, channel, eta, edge, time):" << std::endl;
-            for (const auto& hit : pendingHits) {
+            //for (const auto& hit : pendingHits) {
               //  std::cout << "    Layer " << hit.layerIndex
                 //          << ", Ch " << hit.originalChannel
                   //        << ", Eta " << (hit.isEta1 ? "1" : "2")
                     //      << ", " << (hit.isLeadingEdge ? "Leading" : "Trailing")
                       //    << ", Time " << hit.time << std::endl;
-            }
+            //}
             // Keep only hits close in time to the trigger before forming clusters.
             for (const auto& hit : pendingHits) {
                 if (hit.isLeadingEdge && triggerTime >= 0.0F) {
+                    //std::cout << "Processing hit at time " << hit.time << " with trigger time " << triggerTime << " delta " << (hit.time - triggerTime) << std::endl;
                     float delta = hit.time - triggerTime;
-                    if (delta < -200.0F || delta > -130.0F) {
-                        continue;
-                    }
+                    //if (delta < -200.0F || delta > -130.0F) {
+                    //    continue;
+                    //}
                 }
 
                 Layer* currentLayer = nullptr;
@@ -257,7 +266,7 @@ int main(int argc, char* argv[]) {
                 bool matched = false;
                 for (const auto& c1 : eta1Clusters) {
                     for (const auto& c2 : eta2Clusters) {
-                        if (std::abs(c1.centerChannel - c2.centerChannel) <= 3) {
+                        if (std::abs(c1.centerChannel - c2.centerChannel) <= 1) {
                             matched = true;
                             break;
                         }
