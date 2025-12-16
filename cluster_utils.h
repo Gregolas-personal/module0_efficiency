@@ -12,7 +12,7 @@ struct LayerClusters {
     std::vector<Cluster> eta2;
 };
 
-std::vector<Cluster> buildClusters(const std::vector<Layer::Hit>& hits);
+std::vector<Cluster> buildClusters(const std::vector<Layer::Hit>& hits, int layerIndex, int etaSide);
 
 }  // namespace cluster_utils
 

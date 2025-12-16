@@ -51,6 +51,9 @@ public:
                 }
             }
             it->timeOverThreshold = tot;
+        } else if (it->leadingTime >= 0.0F && it->trailingTime < 0.0F) {
+            // Missing trailing edge: keep the hit and mark TOT with sentinel.
+            it->timeOverThreshold = 9999.0F;
         }
     }
 };

@@ -7,7 +7,7 @@
 
 namespace cluster_utils {
 
-std::vector<Cluster> buildClusters(const std::vector<Layer::Hit>& hits) {
+std::vector<Cluster> buildClusters(const std::vector<Layer::Hit>& hits, int layerIndex, int etaSide) {
     std::vector<Cluster> clusters;
     if (hits.empty()) {
         return clusters;
@@ -38,6 +38,8 @@ std::vector<Cluster> buildClusters(const std::vector<Layer::Hit>& hits) {
         currentCluster.time = earliestTime;
         currentCluster.timeOverThreshold = earliestTot;
         currentCluster.centerChannel = centerChannel;
+        currentCluster.layer = layerIndex;
+        currentCluster.etaSide = etaSide;
         if (earliestChannel >= 0 && centerChannel >= 0 && earliestChannel != centerChannel) {
             std::cerr << "Warning: cluster earliest channel " << earliestChannel
                       << " differs from highest TOT channel " << centerChannel << std::endl;
@@ -53,12 +55,12 @@ std::vector<Cluster> buildClusters(const std::vector<Layer::Hit>& hits) {
     };
 
     for (const auto& hit : sortedHits) {
-        if (hit.timeOverThreshold <= 0.0F || hit.timeOverThreshold >= 9999 || hit.leadingTime < 0.0F) {
+        if (hit.timeOverThreshold <= 0.0F || hit.leadingTime < 0.0F) {
             continue;
         }
 
-        const bool channelClose = hitCount > 0 && std::abs(hit.channel - lastChannel) <= 1;
-        const bool timeClose = hitCount > 0 && std::fabs(hit.leadingTime - lastTime) <= 5.0;
+        const bool channelClose = hitCount > 0 && std::abs(hit.channel - lastChannel) <= 2;
+        const bool timeClose = hitCount > 0 && std::fabs(hit.leadingTime - lastTime) <= 15.0;
 
         if (hitCount == 0 || (!channelClose || !timeClose)) {
             flushCluster();
