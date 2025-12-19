@@ -49,6 +49,13 @@ public:
                 if (tot > halfPeriod) {
                     tot -= period;
                 }
+                // If trailing arrives before leading (even after wrap correction), discard this
+                // trailing edge and keep the hit as “missing trailing” with TOT sentinel.
+                if (tot <= 0.0F) {
+                    it->trailingTime = -1.0F;
+                    it->timeOverThreshold = 9999.0F;
+                    return;
+                }
             }
             it->timeOverThreshold = tot;
         } else if (it->leadingTime >= 0.0F && it->trailingTime < 0.0F) {

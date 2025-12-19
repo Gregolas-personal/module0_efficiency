@@ -69,6 +69,7 @@ int main(int argc, char* argv[]) {
         std::vector<std::vector<int>> hitChannelsPerEvent;
         std::vector<std::vector<float>> hitTimesPerEvent;
         std::vector<float> triggerTimes;
+        size_t correctTriggerCount = 0;
         layersPerEvent.reserve(nEntries);
         clustersPerEvent.reserve(nEntries);
         hitChannelsPerEvent.reserve(nEntries);
@@ -82,6 +83,7 @@ int main(int argc, char* argv[]) {
             float triggerTime = -1.0F;
             std::vector<int> hitChannelsThisEvent;
             std::vector<float> hitTimesThisEvent;
+            bool hasValidTrigger = false;
             struct PendingHit {
                 int layerIndex = -1;
                 int relativeChannel = -1;
@@ -91,6 +93,7 @@ int main(int argc, char* argv[]) {
                 float time = 0.0F;
             };
             std::vector<PendingHit> pendingHits;
+            bool skipEvent = false;
 
             const auto hitsInEvent = hit_channel ? hit_channel->size() : 0;
             // Helper converting raw TDC edges into global time using BCID correction.
@@ -101,48 +104,75 @@ int main(int argc, char* argv[]) {
             };
             for (size_t i = 0; i < hitsInEvent; ++i) {
                 int currentChannel = hit_channel->at(i);
-                bool belongsToEta1 = hit_time1->at(i) > 0 && hit_time2->at(i) == 0;
-                bool belongsToEta2 = hit_time1->at(i) == 0 && hit_time2->at(i) > 0;
-                if (!belongsToEta1 && !belongsToEta2) {
-                    continue;  // hit must be clearly assigned to exactly one eta
+                const float rawTime1 = hit_time1->at(i);
+                const float rawTime2 = hit_time2->at(i);
+                bool hasEta1Time = rawTime1 > 0.0F;
+                bool hasEta2Time = rawTime2 > 0.0F;
+                //std::cout << "Processing hit " << i << ": channel=" << currentChannel
+                //          << "  Total hits in event: " << hitsInEvent
+                //          << " time1=" << rawTime1
+                //          << " time2=" << rawTime2
+                //          << " hasEta1Time=" << hasEta1Time
+                //          << " hasEta2Time=" << hasEta2Time
+                //          << std::endl;
+                if (!hasEta1Time && !hasEta2Time) {
+                    continue;  // no usable timing information
                 }
 
                 bool isLeadingEdge = hit_rise && hit_rise->at(i) == 1;
-                float timeValue = correctedTime(i, belongsToEta1);
-                //std::cout << "  Hit " << i << ": channel=" << currentChannel
-                //          << " eta=" << (belongsToEta1 ? "1" : "2")
-                //          << " edge=" << (isLeadingEdge ? "Leading" : "Trailing")
-                //          << " time before corr=" << (isLeadingEdge ? hit_time1->at(i) : hit_time2->at(i))
-                //          << " time=" << timeValue << std::endl;
+
                 if (currentChannel == 143) {
                     // Trigger is defined only on eta2 rising edge of channel 143.
-                    if (isLeadingEdge && belongsToEta2 && triggerTime < 0.0F) {
-                        triggerTime = timeValue;  // trigger defined by ch. 143 rising edge
+                    if (isLeadingEdge && hasEta2Time && triggerTime < 0.0F) {
+                        float triggerCandidateTime = correctedTime(i, /*useTime1=*/false);
+                        if (triggerCandidateTime < 120.0F) {
+                            skipEvent = true;  // ignore events with early trigger time
+                            break;
+                        }
+                        triggerTime = triggerCandidateTime;  // trigger defined by ch. 143 rising edge
+                        hasValidTrigger = true;
                     }
                     continue;  // do not cluster the trigger channel
                 }
-
+                
                 int layerIndex = (currentChannel % 24) / 8;
                 
                 //std::cout << "For entry " << entry << ", Hit channel: " << currentChannel << ", Layer: " << layerIndex << std::endl;
                 int connector = currentChannel / 24;
                 int strip = 8 * connector + currentChannel % 8;
-                std::cout << "entry " << entry << ": Hit channel " << currentChannel
-                          << " mapped to layer " << layerIndex
-                          << ", connector " << connector
-                          << ", strip " << strip 
-                          << ", eta " << (belongsToEta1 ? "1" : "2")
-                          << ", edge " << (isLeadingEdge ? "Leading" : "Trailing")
-                          << ", time " << timeValue
-                          << std::endl;
-                pendingHits.push_back(PendingHit{
-                    layerIndex,
-                    strip,
-                    currentChannel,
-                    belongsToEta1,
-                    isLeadingEdge,
-                    timeValue});
+                //std::cout << "entry " << entry << ": Hit channel " << currentChannel
+                //          << " mapped to layer " << layerIndex
+                //          << ", connector " << connector
+                //          << ", strip " << strip 
+                //          << ", eta " << (belongsToEta1 ? "1" : "2")
+                //          << ", edge " << (isLeadingEdge ? "Leading" : "Trailing")
+                //          << ", time " << timeValue
+                //          << std::endl;
+                if (hasEta1Time) {
+                    pendingHits.push_back(PendingHit{
+                        layerIndex,
+                        strip,
+                        currentChannel,
+                        /*isEta1=*/true,
+                        isLeadingEdge,
+                        correctedTime(i, /*useTime1=*/true)});
+                }
+                if (hasEta2Time) {
+                    pendingHits.push_back(PendingHit{
+                        layerIndex,
+                        strip,
+                        currentChannel,
+                        /*isEta1=*/false,
+                        isLeadingEdge,
+                        correctedTime(i, /*useTime1=*/false)});
+                }
             } // End loop on hits
+            if (skipEvent) {
+                continue;  // discard event when trigger time is below threshold
+            }
+            if (hasValidTrigger) {
+                ++correctTriggerCount;  // track how many times a valid trigger is found
+            }
             //std::cout << "Event " << entry << ": found " << pendingHits.size() << " valid hits over a total of hits available " << hit_channel->size() << " channels, trigger time = " << triggerTime << std::endl;
             //std::cout << "  Hit details (layer, channel, eta, edge, time):" << std::endl;
             //for (const auto& hit : pendingHits) {
@@ -210,16 +240,15 @@ int main(int argc, char* argv[]) {
         std::cout << "Stored layer info for " << layersPerEvent.size() << " events." << std::endl;
         std::cout << "Built clusters for " << clustersPerEvent.size() << " events (separated per layer)." << std::endl;
         std::cout << "Stored trigger times for " << triggerTimes.size() << " events." << std::endl;
+        std::cout << "Valid triggers found: " << correctTriggerCount << std::endl;
 
         // Hit presence efficiency per layer/side: events with hits over triggered events.
-        size_t triggeredEvents = 0;
         std::array<size_t, 3> eventsWithEta1Hits{};
         std::array<size_t, 3> eventsWithEta2Hits{};
         for (size_t evt = 0; evt < triggerTimes.size(); ++evt) {
             if (triggerTimes[evt] < 0.0F) {
                 continue;
             }
-            ++triggeredEvents;
             for (size_t layerIdx = 0; layerIdx < 3; ++layerIdx) {
                 const auto& ly = layersPerEvent[evt][layerIdx];
                 if (!ly.eta1Hits.empty()) {
@@ -230,21 +259,21 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        if (triggeredEvents > 0) {
+        if (correctTriggerCount > 0) {
             for (size_t layerIdx = 0; layerIdx < 3; ++layerIdx) {
                 double effEta1Hits = static_cast<double>(eventsWithEta1Hits[layerIdx]) /
-                                     static_cast<double>(triggeredEvents);
+                                     static_cast<double>(correctTriggerCount);
                 double effEta2Hits = static_cast<double>(eventsWithEta2Hits[layerIdx]) /
-                                     static_cast<double>(triggeredEvents);
+                                     static_cast<double>(correctTriggerCount);
                 std::cout << "Layer " << layerIdx << " hit efficiency: "
                           << "eta1=" << effEta1Hits << " (" << eventsWithEta1Hits[layerIdx]
-                          << "/" << triggeredEvents << "), "
+                          << "/" << correctTriggerCount << "), "
                           << "eta2=" << effEta2Hits << " (" << eventsWithEta2Hits[layerIdx]
-                          << "/" << triggeredEvents << ")"
+                          << "/" << correctTriggerCount << ")"
                           << std::endl;
             }
         } else {
-            std::cout << "No triggers found; hit efficiencies unavailable." << std::endl;
+            std::cout << "No valid triggers found; hit efficiencies unavailable." << std::endl;
         }
 
         // Compute efficiency per layer: events with ≥1 eta1 cluster matched to an eta2 cluster (|Δchannel| ≤ 1)
@@ -266,7 +295,7 @@ int main(int argc, char* argv[]) {
                 bool matched = false;
                 for (const auto& c1 : eta1Clusters) {
                     for (const auto& c2 : eta2Clusters) {
-                        if (std::abs(c1.centerChannel - c2.centerChannel) <= 1) {
+                        if (std::abs(c1.centerChannel - c2.centerChannel) <= 2) {
                             matched = true;
                             break;
                         }
@@ -320,13 +349,17 @@ int main(int argc, char* argv[]) {
                 const auto& layerHits = layersPerEvent[evt][layerIdx];
                 std::cout << "  Layer " << layerIdx << " hits: eta1=" << layerHits.eta1Hits.size()
                           << " eta2=" << layerHits.eta2Hits.size() << std::endl;
+                size_t totalHitsLayer = layerHits.eta1Hits.size() + layerHits.eta2Hits.size();
+                size_t totalClustersLayer = layerClusters.eta1.size() + layerClusters.eta2.size();
+                std::cout << "    Total hits (eta1+eta2): " << totalHitsLayer << std::endl;
+                std::cout << "    Total clusters (eta1+eta2): " << totalClustersLayer << std::endl;
                 // Print helper to display center channel and multiplicity per eta.
                 auto printClusters = [&](const std::vector<Cluster>& clusters, const char* etaLabel) {
                     std::cout << "  Layer " << layerIdx << " " << etaLabel << " clusters: " << clusters.size() << std::endl;
                     for (size_t i = 0; i < clusters.size(); ++i) {
                         const auto& cluster = clusters[i];
                         std::cout << "    Cluster " << i << " center=" << cluster.centerChannel
-                                  << " channels=" << cluster.channels.size()
+                                  << " size=" << cluster.channels.size()
                                   << " time=" << cluster.time << std::endl;
                     }
                 };
