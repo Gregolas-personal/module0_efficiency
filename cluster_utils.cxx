@@ -60,7 +60,7 @@ std::vector<Cluster> buildClusters(const std::vector<Layer::Hit>& hits, int laye
         }
 
         const bool channelClose = hitCount > 0 && std::abs(hit.channel - lastChannel) <= 1;
-        const bool timeClose = hitCount > 0 && std::fabs(hit.leadingTime - lastTime) <= 800.0;
+        const bool timeClose = hitCount > 0 && std::fabs(hit.leadingTime - lastTime) <= 10.0;
 
         if (hitCount == 0 || (!channelClose || !timeClose)) {
             flushCluster();

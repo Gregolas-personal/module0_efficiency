@@ -187,9 +187,9 @@ int main(int argc, char* argv[]) {
                 if (hit.isLeadingEdge && triggerTime >= 0.0F) {
                     //std::cout << "Processing hit at time " << hit.time << " with trigger time " << triggerTime << " delta " << (hit.time - triggerTime) << std::endl;
                     float delta = hit.time - triggerTime;
-                    //if (delta < -200.0F || delta > -130.0F) {
-                    //    continue;
-                    //}
+                    if (delta < -200.0F || delta > -130.0F) {
+                        continue;
+                    }
                 }
 
                 Layer* currentLayer = nullptr;
