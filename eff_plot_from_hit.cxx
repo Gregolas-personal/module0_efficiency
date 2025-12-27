@@ -1,17 +1,25 @@
-#include <TFile.h>
-#include <TTree.h>
-#include <TH2F.h>
-#include <TH1I.h>
-#include <TH1F.h>
-#include <TString.h>
+#include <TApplication.h>
 #include <TCanvas.h>
+#include <TFile.h>
+#include <TF1.h>
+#include <TH1F.h>
+#include <TH1I.h>
+#include <TH2D.h>
+#include <TH2F.h>
 #include <TGraphErrors.h>
+#include <TLegend.h>
+#include <TROOT.h>
+#include <TString.h>
 #include <TSystem.h>
+#include <TTree.h>
 #include <iostream>
+#include <memory>
+#include <string>
 #include <vector>
 #include <regex>
 #include <array>
 #include <algorithm>
+#include <map>
 #include <cmath>
 #include <limits>
 #include "cluster.h"
@@ -25,14 +33,28 @@ using cluster_utils::buildClusters;
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cout << "Usage: ./plot <root_file1> ..." << std::endl;
+        std::cout << "Usage: ./plot <root_file1> [--skip-display]" << std::endl;
         return 1;
+    }
+    std::string inputFile = argv[1];
+    bool showDisplay = true;
+    if (argc >= 3 && std::string(argv[2]) == "--skip-display") {
+        showDisplay = false;
+    }
+
+    // Initialize ROOT application to allow canvas display if requested.
+    std::unique_ptr<TApplication> appPtr;
+    if (showDisplay) {
+        appPtr = std::make_unique<TApplication>("app", &argc, argv);
+        gROOT->SetBatch(kFALSE);
+    } else {
+        gROOT->SetBatch(kTRUE);
     }
 
     // Open input ROOT file containing the hit tree.
-    TFile* file = TFile::Open(argv[1]);
+    TFile* file = TFile::Open(inputFile.c_str());
     if (!file || file->IsZombie()) {
-        std::cout << "Could not open file: " << argv[1] << std::endl;
+        std::cout << "Could not open file: " << inputFile << std::endl;
         return 1;
     }
 
@@ -76,6 +98,15 @@ int main(int argc, char* argv[]) {
         hitTimesPerEvent.reserve(nEntries);
         triggerTimes.reserve(nEntries);
 
+        // Histogram to capture clusters-per-event vs cluster size (axes intentionally swapped).
+        const int maxClusterSizeBins = 20;
+        const int maxClustersPerEventBins = 20;
+        TH2D* hClustersPerEventVsSize = new TH2D(
+            "hClustersPerEventVsSize",
+            "Clusters per event vs cluster size;Clusters per event;Cluster size (#channels)",
+            maxClustersPerEventBins, -0.5, maxClustersPerEventBins - 0.5,
+            maxClusterSizeBins, 0.5, maxClusterSizeBins + 0.5);
+
         // Event loop: fill layers, compute clusters, capture trigger info.
         for (Long64_t entry = 0; entry < nEntries; ++entry) {
             tree->GetEntry(entry);
@@ -96,7 +127,7 @@ int main(int argc, char* argv[]) {
             bool skipEvent = false;
 
             const auto hitsInEvent = hit_channel ? hit_channel->size() : 0;
-            // Helper converting raw TDC edges into global time using BCID correction.
+            // Helper converting raw DCT edges into global time using BCID correction.
             auto correctedTime = [&](size_t idx, bool useTime1) -> float {
                 float rawTime = useTime1 ? hit_time1->at(idx) : hit_time2->at(idx);
                 int bcid = hit_bcid ? hit_bcid->at(idx) : 0;
@@ -237,6 +268,30 @@ int main(int argc, char* argv[]) {
             clustersPerEvent.push_back(std::move(eventClusters));
         } // End loop over entries
 
+        /********************************** END OF CLUSTER ALGORITHM **********************************/
+        // Lets add some plots:
+
+        // For each event, count clusters by size and fill the TH2D.
+        for (size_t evt = 0; evt < clustersPerEvent.size(); ++evt) {
+            std::map<int, int> clustersPerSize;
+            const auto& eventClusters = clustersPerEvent[evt];
+            auto accumulateClusterSizes = [&clustersPerSize](const std::vector<Cluster>& clusters) {
+                for (const auto& cluster : clusters) {
+                    int size = static_cast<int>(cluster.channels.size());
+                    ++clustersPerSize[size];
+                }
+            };
+            for (const auto& layerClusters : eventClusters) {
+                accumulateClusterSizes(layerClusters.eta1);
+                accumulateClusterSizes(layerClusters.eta2);
+            }
+            for (const auto& [clusterSize, count] : clustersPerSize) {
+                hClustersPerEventVsSize->Fill(count, clusterSize);
+            }
+        }
+
+
+        // Summary of collected data.
         std::cout << "Stored layer info for " << layersPerEvent.size() << " events." << std::endl;
         std::cout << "Built clusters for " << clustersPerEvent.size() << " events (separated per layer)." << std::endl;
         std::cout << "Stored trigger times for " << triggerTimes.size() << " events." << std::endl;
@@ -309,6 +364,164 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+        
+        // Per-event display: cluster centers vs layer and eta1-eta2 time differences vs layer.
+        const double layerSpacingCm = 3.0;
+        std::unique_ptr<TCanvas> cEvt;
+        if (showDisplay) {
+            cEvt = std::make_unique<TCanvas>("cEvt", "Event display", 1200, 600);
+            cEvt->Divide(2, 1);
+            for (size_t evt = 0; evt < clustersPerEvent.size(); ++evt) {
+                std::vector<double> zEta1;
+                std::vector<double> centersEta1;
+                std::vector<double> zEta2;
+                std::vector<double> centersEta2;
+                std::vector<double> zMatched;
+                std::vector<double> timeDiffMatched;  // eta1 - eta2
+
+                for (size_t layerIdx = 0; layerIdx < 3; ++layerIdx) {
+                    double zEta2Layer = layerIdx * layerSpacingCm;
+                    double zEta1Layer = zEta2Layer + 0.2;  // 2 mm higher for eta1
+                    const auto& eta1Clusters = clustersPerEvent[evt][layerIdx].eta1;
+                    const auto& eta2Clusters = clustersPerEvent[evt][layerIdx].eta2;
+                    if (!eta1Clusters.empty()) {
+                        zEta1.push_back(zEta1Layer);
+                        centersEta1.push_back(static_cast<double>(eta1Clusters.front().centerChannel));
+                    }
+                    if (!eta2Clusters.empty()) {
+                        zEta2.push_back(zEta2Layer);
+                        centersEta2.push_back(static_cast<double>(eta2Clusters.front().centerChannel));
+                    }
+
+                    // Find best-matched clusters between eta1 and eta2 for this layer (closest center within ±2).
+                    const Cluster* bestEta1 = nullptr;
+                    const Cluster* bestEta2 = nullptr;
+                    int bestCenterDelta = std::numeric_limits<int>::max();
+                    for (const auto& c1 : eta1Clusters) {
+                        for (const auto& c2 : eta2Clusters) {
+                            int delta = std::abs(c1.centerChannel - c2.centerChannel);
+                            if (delta <= 2 && delta < bestCenterDelta) {
+                                bestCenterDelta = delta;
+                                bestEta1 = &c1;
+                                bestEta2 = &c2;
+                            }
+                        }
+                    }
+                    if (bestEta1 && bestEta2) {
+                        // Use eta1 z for the matched point to reflect the vertical offset.
+                        double zMatch = zEta2Layer + 0.2;
+                        zMatched.push_back(zMatch);
+                        timeDiffMatched.push_back(bestEta1->time - bestEta2->time);
+                    }
+                }
+
+                // Pad 1: cluster centers vs layer (now X=layer z, Y=center channel).
+                cEvt->cd(1);
+                gPad->Clear();
+                TH2F* frameCenters = new TH2F(Form("frameCenters_%zu", evt),
+                                              "Cluster centers;Layer z (cm);Center channel",
+                                              10, -1.0, layerSpacingCm * 3 + 1.0,
+                                              41, -0.5, 40.5);
+                frameCenters->SetStats(false);
+                frameCenters->Draw();
+                TGraph* gEta1 = nullptr;
+                TGraph* gEta2 = nullptr;
+                if (!zEta1.empty()) {
+                    gEta1 = new TGraph(static_cast<int>(zEta1.size()), zEta1.data(), centersEta1.data());
+                    gEta1->SetName(Form("gEta1_evt%zu", evt));
+                    gEta1->SetMarkerStyle(20);
+                    gEta1->SetMarkerColor(kRed);
+                    gEta1->Draw("P SAME");
+                }
+                if (!zEta2.empty()) {
+                    gEta2 = new TGraph(static_cast<int>(zEta2.size()), zEta2.data(), centersEta2.data());
+                    gEta2->SetName(Form("gEta2_evt%zu", evt));
+                    gEta2->SetMarkerStyle(21);
+                    gEta2->SetMarkerColor(kBlue);
+                    gEta2->Draw("P SAME");
+                }
+                TLegend* legCenters = new TLegend(0.60, 0.65, 0.88, 0.88);
+                legCenters->AddEntry((TObject*)nullptr, Form("Event %zu", evt), "");
+                if (gEta1) {
+                    legCenters->AddEntry(gEta1, "Eta1 center", "p");
+                }
+                if (gEta2) {
+                    legCenters->AddEntry(gEta2, "Eta2 center", "p");
+                }
+                // Combined linear fit using both eta1 and eta2 points if at least 3 exist total.
+                std::vector<double> zAll;
+                std::vector<double> centersAll;
+                zAll.reserve(zEta1.size() + zEta2.size());
+                centersAll.reserve(centersEta1.size() + centersEta2.size());
+                zAll.insert(zAll.end(), zEta1.begin(), zEta1.end());
+                zAll.insert(zAll.end(), zEta2.begin(), zEta2.end());
+                centersAll.insert(centersAll.end(), centersEta1.begin(), centersEta1.end());
+                centersAll.insert(centersAll.end(), centersEta2.begin(), centersEta2.end());
+                if (zAll.size() >= 3) {
+                    TGraph* gAll = new TGraph(static_cast<int>(zAll.size()), zAll.data(), centersAll.data());
+                    gAll->SetName(Form("gAll_evt%zu", evt));
+                    gAll->SetLineColor(kBlack);
+                    gAll->SetLineWidth(2);
+                    gAll->SetMarkerColor(kBlack);
+                    TF1* fAll = new TF1(Form("f_eta_evt%zu", evt), "pol1", -1.0, layerSpacingCm * 3 + 1.0);
+                    gAll->Fit(fAll, "Q");
+                    fAll->SetLineColor(kBlack);
+                    fAll->SetLineWidth(2);
+                    fAll->Draw("SAME");
+                    legCenters->AddEntry(fAll,
+                                         Form("Combined fit: y=%.2f+%.2fx, #chi^{2}=%.2f",
+                                              fAll->GetParameter(0), fAll->GetParameter(1), fAll->GetChisquare()),
+                                         "l");
+                }
+                legCenters->Draw();
+
+                // Pad 2: time difference of matched clusters vs layer (now X=layer z, Y=Δt).
+                cEvt->cd(2);
+                gPad->Clear();
+                TH2F* frameDt = new TH2F(Form("frameDt_%zu", evt),
+                                         "Matched cluster #Delta t (eta1 - eta2);Layer z (cm);#Delta t (ns)",
+                                         10, -1.0, layerSpacingCm * 3 + 1.0,
+                                         200, -100.0, 100.0);
+                frameDt->SetStats(false);
+                frameDt->Draw();
+                if (!zMatched.empty()) {
+                    TGraph* gDt = new TGraph(static_cast<int>(zMatched.size()), zMatched.data(), timeDiffMatched.data());
+                    gDt->SetMarkerStyle(22);
+                    gDt->SetMarkerColor(kGreen + 2);
+                    gDt->Draw("P SAME");
+                    TLegend* legDt = new TLegend(0.60, 0.75, 0.88, 0.88);
+                    legDt->AddEntry((TObject*)nullptr, Form("Event %zu", evt), "");
+                    // Reuse the fitter to also report parameters for dt plot.
+                    auto fitDt = [legDt](TGraph* g, const char* name, int color) {
+                        if (!g || g->GetN() < 3) {
+                            return;
+                        }
+                        double xmin, ymin, xmax, ymax;
+                        g->ComputeRange(xmin, ymin, xmax, ymax);
+                        TF1* f = new TF1(Form("f_%s", name), "pol1", xmin, xmax);
+                        f->SetLineColor(color);
+                        g->Fit(f, "Q");
+                        if (legDt) {
+                            legDt->AddEntry(f, Form("%s fit: y=%.2f+%.2fx, #chi^{2}=%.2f",
+                                                    name, f->GetParameter(0), f->GetParameter(1), f->GetChisquare()),
+                                            "l");
+                        }
+                    };
+                    fitDt(gDt, Form("dt_evt%zu", evt), kGreen + 2);
+                    legDt->Draw();
+                }
+                cEvt->Update();
+                gSystem->ProcessEvents();
+                std::cout << "Displayed event " << evt << ". Press Enter to continue." << std::endl;
+                std::string tmp;
+                std::getline(std::cin, tmp);
+            }
+        }
+        // Keep the GUI alive if user wants to interact with the last canvas.
+        if (showDisplay && appPtr) {
+            appPtr->Run(kTRUE);
+        }
+        
         if (totalEvents > 0) {
             for (size_t layerIdx = 0; layerIdx < 3; ++layerIdx) {
                 double eff = static_cast<double>(eventsWithMatchedClusters[layerIdx]) /
@@ -368,6 +581,12 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+
+        // Draw and persist the clusters-per-event vs cluster-size histogram.
+        TCanvas* cClustersVsSize = new TCanvas("cClustersVsSize", "Clusters per event vs cluster size", 800, 600);
+        hClustersPerEventVsSize->SetStats(false);
+        hClustersPerEventVsSize->Draw("COLZ");
+        cClustersVsSize->SaveAs("clusters_per_event_vs_size.png");
         file->Close();
         
     return 0;
