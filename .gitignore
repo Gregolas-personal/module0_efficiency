@@ -2,8 +2,14 @@
 *.txt
 *.exe
 *.out
+*.png
+*.pdf
+*.aux
 *.log
 *.so
 *.dylib
 *.o
 *.class
+ly0/
+ly1/
+ly2/
